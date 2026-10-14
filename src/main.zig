@@ -59,11 +59,11 @@ const Position = struct {
         return self.pieces.orthogonal & self.pieces.diagonal;
     }
 
-    pub inline fn rook(self: Position) u64 {
+    pub inline fn rooks(self: Position) u64 {
         return self.pieces.orthogonal & ~self.pieces.diagonal;
     }
 
-    pub inline fn bishop(self: Position) u64 {
+    pub inline fn bishops(self: Position) u64 {
         return ~self.pieces.orthogonal & self.pieces.diagonal;
     }
 };
@@ -109,11 +109,11 @@ fn printBitboard(bitboard: u64) void {
     std.debug.print("  a b c d e f g h\n", .{});
 }
 
-inline fn shiftBy(bitboard: u64, shift_amount: i8) u64 {
-    if (shift_amount >= 0)
-        return bitboard >> shift_amount
+inline fn shiftBy(bitboard: u64, comptime delta: i8) u64 {
+    if (delta >= 0)
+        return bitboard << delta
     else
-        return bitboard << -shift_amount;
+        return bitboard >> -delta;
 }
 
 inline fn knightAttacks(knights: u64) u64 {
@@ -174,13 +174,13 @@ const RayWalking = struct {
         piece: u64,
         occupied: u64,
         comptime border: u64,
-        comptime shift_amount: i8,
+        comptime shift_delta: i8,
     ) u64 {
         var attacks: u64 = 0;
 
         var current = piece;
         while (current & border == 0) {
-            current = shiftBy(current, shift_amount);
+            current = shiftBy(current, shift_delta);
             attacks |= current;
             if (current & occupied != 0) break;
         }
@@ -190,18 +190,18 @@ const RayWalking = struct {
 
     /// Friendly pieces should be filtered later.
     inline fn rookAttacks(rook: u64, occupied: u64) u64 {
-        return rayAttacks(rook, occupied, FILE_H, -1) |
-            rayAttacks(rook, occupied, FILE_A, 1) |
-            rayAttacks(rook, occupied, RANK_8, -8) |
-            rayAttacks(rook, occupied, RANK_1, 8);
+        return rayAttacks(rook, occupied, FILE_H, 1) |
+            rayAttacks(rook, occupied, FILE_A, -1) |
+            rayAttacks(rook, occupied, RANK_8, 8) |
+            rayAttacks(rook, occupied, RANK_1, -8);
     }
 
     /// Friendly pieces should be filtered later.
     inline fn bishopAttacks(bishop: u64, occupied: u64) u64 {
-        return rayAttacks(bishop, occupied, FILE_A | RANK_8, -7) |
-            rayAttacks(bishop, occupied, FILE_A | RANK_1, 9) |
-            rayAttacks(bishop, occupied, FILE_H | RANK_1, 7) |
-            rayAttacks(bishop, occupied, FILE_H | RANK_8, -9);
+        return rayAttacks(bishop, occupied, FILE_A | RANK_8, 7) |
+            rayAttacks(bishop, occupied, FILE_A | RANK_1, -9) |
+            rayAttacks(bishop, occupied, FILE_H | RANK_1, -7) |
+            rayAttacks(bishop, occupied, FILE_H | RANK_8, 9);
     }
 
     /// Friendly pieces should be filtered later.
@@ -228,15 +228,15 @@ const PrecomputedEmptyBoardRays = struct {
 
         inline for (0..64) |i| {
             const pos: u64 = 1 << i;
-            rays.north[i] = RayWalking.rayAttacks(pos, 0, RANK_8, -8);
-            rays.south[i] = RayWalking.rayAttacks(pos, 0, RANK_1, 8);
-            rays.east[i] = RayWalking.rayAttacks(pos, 0, FILE_H, -1);
-            rays.west[i] = RayWalking.rayAttacks(pos, 0, FILE_A, 1);
+            rays.north[i] = RayWalking.rayAttacks(pos, 0, RANK_8, 8);
+            rays.south[i] = RayWalking.rayAttacks(pos, 0, RANK_1, -8);
+            rays.east[i] = RayWalking.rayAttacks(pos, 0, FILE_H, 1);
+            rays.west[i] = RayWalking.rayAttacks(pos, 0, FILE_A, -1);
 
-            rays.north_east[i] = RayWalking.rayAttacks(pos, 0, RANK_8 | FILE_H, -9);
-            rays.north_west[i] = RayWalking.rayAttacks(pos, 0, RANK_8 | FILE_A, -7);
-            rays.south_east[i] = RayWalking.rayAttacks(pos, 0, RANK_1 | FILE_H, 7);
-            rays.south_west[i] = RayWalking.rayAttacks(pos, 0, RANK_1 | FILE_A, 9);
+            rays.north_east[i] = RayWalking.rayAttacks(pos, 0, RANK_8 | FILE_H, 9);
+            rays.north_west[i] = RayWalking.rayAttacks(pos, 0, RANK_8 | FILE_A, 7);
+            rays.south_east[i] = RayWalking.rayAttacks(pos, 0, RANK_1 | FILE_H, -7);
+            rays.south_west[i] = RayWalking.rayAttacks(pos, 0, RANK_1 | FILE_A, -9);
         }
 
         return rays;
@@ -273,7 +273,7 @@ const PrecomputedEmptyBoardRays = struct {
     }
 
     inline fn rookAttacks(
-        self: *PrecomputedEmptyBoardRays,
+        self: *const PrecomputedEmptyBoardRays,
         rook: u64,
         occupied: u64,
     ) u64 {
@@ -284,7 +284,7 @@ const PrecomputedEmptyBoardRays = struct {
     }
 
     inline fn bishopAttacks(
-        self: *PrecomputedEmptyBoardRays,
+        self: *const PrecomputedEmptyBoardRays,
         bishop: u64,
         occupied: u64,
     ) u64 {
@@ -295,7 +295,7 @@ const PrecomputedEmptyBoardRays = struct {
     }
 
     inline fn queenAttacks(
-        self: *PrecomputedEmptyBoardRays,
+        self: *const PrecomputedEmptyBoardRays,
         queen: u64,
         occupied: u64,
     ) u64 {
@@ -304,10 +304,73 @@ const PrecomputedEmptyBoardRays = struct {
     }
 };
 
-pub fn main() void {
-    const rays = comptime PrecomputedEmptyBoardRays.init();
+/// Allows to process multiple pieces at once.
+/// This is useful for questions such as: "Is the king currently in check?".
+const Dumb7Fill = struct {
+    inline fn fill(
+        sliders: u64,
+        empty: u64,
+        comptime shift_delta: i8,
+        comptime border: u64,
+    ) u64 {
+        var frontier = sliders;
+        var attacks: u64 = 0;
 
-    const piece = bit(.d4);
-    const occupied = bit(.d2) | bit(.b6);
-    printBitboard(rays.queenAttacks(piece, occupied));
+        for (0..7) |_| {
+            const next = shiftBy(frontier & ~border, shift_delta);
+            attacks |= next;
+            frontier = next & empty;
+        }
+
+        return attacks;
+    }
+
+    inline fn rookAttacks(rooks: u64, occupied: u64) u64 {
+        const empty = ~occupied;
+
+        return fill(rooks, empty, 8, 0) |
+            fill(rooks, empty, -8, 0) |
+            fill(rooks, empty, 1, FILE_H) |
+            fill(rooks, empty, -1, FILE_A);
+    }
+
+    inline fn bishopAttacks(bishops: u64, occupied: u64) u64 {
+        const empty = ~occupied;
+
+        return fill(bishops, empty, 7, FILE_A) |
+            fill(bishops, empty, -9, FILE_A) |
+            fill(bishops, empty, -7, FILE_H) |
+            fill(bishops, empty, 9, FILE_H);
+    }
+
+    inline fn queenAttacks(queens: u64, occupied: u64) u64 {
+        return rookAttacks(queens, occupied) | bishopAttacks(queens, occupied);
+    }
+};
+
+pub fn main() void {
+    @setEvalBranchQuota(100_000);
+    const rays = comptime PrecomputedEmptyBoardRays.init();
+    _ = rays;
+
+    // const piece = bit(.d4);
+    // const occupied = bit(.d2) | bit(.b6);
+    // printBitboard(rays.queenAttacks(piece, occupied));
+
+    var prng = std.Random.DefaultPrng.init(12345);
+    const random = prng.random();
+
+    for (0..100_000) |_| {
+        const square: u6 = @intCast(random.uintLessThan(u8, 64));
+        const piece = @as(u64, 1) << square;
+
+        var occupied = random.int(u64);
+        occupied |= piece;
+
+        const expected = RayWalking.queenAttacks(piece, occupied);
+        // const actual = rays.queenAttacks(piece, occupied);
+        const actual = Dumb7Fill.queenAttacks(piece, occupied);
+
+        std.debug.assert(expected == actual);
+    }
 }
